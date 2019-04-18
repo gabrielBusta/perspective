@@ -80,6 +80,51 @@ namespace binding {
     }
 
     /**
+     * @brief For each column we sort by, if the column is hidden then
+     * add it to `j_aggs`.
+     *
+     * @tparam
+     * @param schema
+     * @param row_pivots
+     * @param column_pivots
+     * @param sortbys
+     * @param columns
+     * @param j_aggs
+     */
+    template <>
+    val
+    _add_aggregates_from_sort(const t_schema& schema,
+        const std::vector<std::string>& row_pivots,
+        const std::vector<std::string>& column_pivots, const std::vector<std::string>& columns,
+        const std::vector<val>& sortbys, val j_aggs) {
+        for (auto sortby : sortbys) {
+            std::string column = sortby[0].as<std::string>();
+            bool is_hidden_column
+                = std::find(columns.begin(), columns.end(), column) != columns.end();
+
+            if (is_hidden_column) {
+                bool is_pivot = (std::find(row_pivots.begin(), row_pivots.end(), column)
+                                    != row_pivots.end())
+                    || (std::find(column_pivots.begin(), column_pivots.end(), column)
+                           != column_pivots.end());
+
+                if (is_pivot) {
+                    j_aggs[sortby[0]] = val("unique");
+                } else {
+                    t_dtype dtype = schema.get_dtype(column);
+                    // use defaults if not in `j_aggs`
+                    if (!hasValue(j_aggs[sortby[0]])) {
+                        std::string agg_op_str = _get_default_aggregate_string(dtype);
+                        j_aggs[sortby[0]] = val(agg_op_str);
+                    }
+                }
+            }
+        }
+
+        return j_aggs;
+    }
+
+    /**
      * @brief
      *
      * @param schema
@@ -87,12 +132,13 @@ namespace binding {
      * @param j_aggs
      * @return std::vector<t_aggspec>
      */
+    template <>
     std::vector<t_aggspec>
-    _get_aggspecs(const t_schema& schema, bool column_only, val j_columns, val j_aggs) {
+    _get_aggspecs(const t_schema& schema, bool column_only,
+        const std::vector<std::string>& columns, val j_aggs) {
         std::vector<t_aggspec> aggspecs;
         val agg_columns = val::global("Object").call<val>("keys", j_aggs);
         std::vector<std::string> aggs = vecFromArray<val, std::string>(agg_columns);
-        std::vector<std::string> columns = vecFromArray<val, std::string>(j_columns);
 
         /**
          * Provide aggregates for columns that are shown but NOT specified in
@@ -109,21 +155,7 @@ namespace binding {
                 = t_aggtype::AGGTYPE_ANY; // use aggtype here since we are not parsing aggs
 
             if (!column_only) {
-                switch (dtype) {
-                    case DTYPE_FLOAT64:
-                    case DTYPE_FLOAT32:
-                    case DTYPE_UINT8:
-                    case DTYPE_UINT16:
-                    case DTYPE_UINT32:
-                    case DTYPE_UINT64:
-                    case DTYPE_INT8:
-                    case DTYPE_INT16:
-                    case DTYPE_INT32:
-                    case DTYPE_INT64: {
-                        agg_op = t_aggtype::AGGTYPE_SUM;
-                    } break;
-                    default: { agg_op = t_aggtype::AGGTYPE_DISTINCT_COUNT; }
-                }
+                agg_op = _get_default_aggregate(dtype);
             }
 
             aggspecs.push_back(t_aggspec(column, agg_op, dependencies));
@@ -167,9 +199,9 @@ namespace binding {
      */
     template <>
     std::vector<t_sortspec>
-    _get_sort(const std::vector<std::string>& columns, bool is_column_sort, val j_sortby) {
+    _get_sort(const std::vector<std::string>& columns, bool is_column_sort,
+        const std::vector<val>& sortbys) {
         std::vector<t_sortspec> svec{};
-        std::vector<val> sortbys = vecFromArray<val, val>(j_sortby);
 
         auto _is_valid_sort = [is_column_sort](val sort_item) {
             /**
@@ -1613,6 +1645,7 @@ namespace binding {
         std::vector<std::string> row_pivots;
         std::vector<std::string> column_pivots;
         std::vector<t_aggspec> aggregates;
+        std::vector<std::string> aggregate_names;
         std::vector<std::string> columns;
         std::vector<t_fterm> filters;
         std::vector<t_sortspec> sorts;
@@ -1635,8 +1668,19 @@ namespace binding {
             column_only = true;
         }
 
-        aggregates = _get_aggspecs(schema, column_only, j_columns, j_aggregates);
-        columns = _get_aggregate_names(aggregates);
+        columns = vecFromArray<val, std::string>(j_columns);
+
+        // ensure that sorting by hidden columns will work
+        std::vector<val> sortbys;
+        if (hasValue(j_sort)) {
+            sortbys = vecFromArray<val, val>(j_sort);
+            j_aggregates = _add_aggregates_from_sort(
+                schema, row_pivots, column_pivots, columns, sortbys, j_aggregates);
+        }
+
+        // Use column names from aggregates to ensure that all columns are counted
+        aggregates = _get_aggspecs(schema, column_only, columns, j_aggregates);
+        aggregate_names = _get_aggregate_names(aggregates);
 
         if (hasValue(j_filter)) {
             filters = _get_fterms(schema, date_parser, j_filter);
@@ -1645,13 +1689,13 @@ namespace binding {
             }
         }
 
-        if (hasValue(j_sort)) {
-            sorts = _get_sort(columns, false, j_sort);
-            col_sorts = _get_sort(columns, true, j_sort);
+        if (sortbys.size() > 0) {
+            sorts = _get_sort(aggregate_names, false, sortbys);
+            col_sorts = _get_sort(aggregate_names, true, sortbys);
         }
 
         auto view_config = t_config(row_pivots, column_pivots, aggregates, sorts, col_sorts,
-            filter_op, filters, columns, column_only);
+            filter_op, filters, aggregate_names, column_only);
 
         return view_config;
     }

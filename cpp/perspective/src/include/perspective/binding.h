@@ -44,9 +44,18 @@ namespace binding {
      *
      * Data Loading
      */
+
+    // Aggregate parsing utilities
     t_index _get_aggregate_index(const std::vector<std::string>& agg_names, std::string name);
 
     std::vector<std::string> _get_aggregate_names(const std::vector<t_aggspec>& aggs);
+
+    // Make sure hidden columns work by adding their aggregates
+    template <typename T>
+    T _add_aggregates_from_sort(const t_schema& schema,
+        const std::vector<std::string>& row_pivots,
+        const std::vector<std::string>& column_pivots, const std::vector<std::string>& columns,
+        const std::vector<T>& sortbys, T j_aggs);
 
     /**
      *
@@ -60,12 +69,12 @@ namespace binding {
      *
      */
     template <typename T>
-    std::vector<t_aggspec> _get_aggspecs(
-        const t_schema& schema, bool column_only, T j_columns, T j_aggs);
+    std::vector<t_aggspec> _get_aggspecs(const t_schema& schema, bool column_only,
+        const std::vector<std::string>& columns, T j_aggs);
 
     template <typename T>
-    std::vector<t_sortspec> _get_sort(
-        const std::vector<std::string>& columns, bool is_column_sort, T j_sortby);
+    std::vector<t_sortspec> _get_sort(const std::vector<std::string>& columns,
+        bool is_column_sort, const std::vector<T>& sortbys);
 
     /**
      *
